@@ -1,0 +1,22 @@
+# Framework Web
+streamlit>=1.32.0
+
+# Intelligence Artificielle (Agent Claude)
+anthropic>=0.20.0
+
+# Manipulation de données et statistiques
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Visualisation de données (Graphiques du Chapitre 4)
+matplotlib>=3.8.0
+plotly>=5.18.0
+
+# Génération des Bilans d'Orientation en PDF
+fpdf2>=2.7.0
+
+# Gestion des variables d'environnement (Clé API)
+python-dotenv>=1.0.0
+
+# Traitement d'images (Logo du Lycée de la Cité Verte)
+Pillow>=10.2.0
