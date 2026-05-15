@@ -348,6 +348,7 @@ class CapAvenirDB:
         )
         """)
 
+<<<<<<< HEAD
         # ----- Table des soumissions de tests par les élèves -----
         # Créée ici et également initialisée dans l'app pour garantir la compatibilité
         cursor.execute("""
@@ -384,6 +385,8 @@ class CapAvenirDB:
         )
         """)
 
+=======
+>>>>>>> 8600258310c6e9acb95fd8f0d1ff326df176f242
         self.conn.commit()
 
     # -------------------------------------------------------------------------
@@ -453,6 +456,7 @@ class CapAvenirDB:
             pass
 
     # -------------------------------------------------------------------------
+<<<<<<< HEAD
     # SOUMISSIONS TESTS ÉLÈVES (espace élève → conseiller)
     # -------------------------------------------------------------------------
     def sauvegarder_submission_eleve(self, nom: str, prenom: str, lycee: str,
@@ -560,6 +564,8 @@ class CapAvenirDB:
 
 
     # -------------------------------------------------------------------------
+=======
+>>>>>>> 8600258310c6e9acb95fd8f0d1ff326df176f242
     # SAUVEGARDE PRINCIPALE
     # -------------------------------------------------------------------------
     def sauvegarder_dossier(self, ss, etalonner_fn=None) -> dict:
@@ -1467,4 +1473,7 @@ if __name__ == "__main__":
         print("\n[Test terminé] Fichier test supprimé.")
     print("\n✅ Module capavenir_database.py opérationnel.")
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 8600258310c6e9acb95fd8f0d1ff326df176f242
