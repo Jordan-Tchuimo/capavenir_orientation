@@ -95,6 +95,73 @@ def rerun():
     except AttributeError:
         st.experimental_rerun()
 
+
+# ── Flèche retour universelle ─────────────────────────────────────────────
+def _retour_accueil(label: str = "← Accueil", key: str = "retour_accueil_global"):
+    """
+    Bouton retour stylisé qui réinitialise toute la navigation
+    et renvoie l'utilisateur à la page d'accueil principale.
+    Appelé en tête de chaque page/vue.
+    """
+    st.markdown("""
+    <style>
+    div[data-testid="stButton"] button[kind="secondary"].retour-btn {
+        background: transparent !important;
+        border: 1.5px solid rgba(99,102,241,0.35) !important;
+        color: #6366f1 !important;
+        border-radius: 8px !important;
+        font-size: 0.82rem !important;
+        font-weight: 600 !important;
+        padding: 0.25rem 0.9rem !important;
+        transition: all 0.18s ease;
+    }
+    </style>""", unsafe_allow_html=True)
+    col_btn, col_spacer = st.columns([1, 8])
+    with col_btn:
+        if st.button(label, key=key, type="secondary"):
+            # Réinitialiser toute la navigation
+            st.session_state.mode_accueil       = "accueil"
+            st.session_state.accueil_sous_mode  = None
+            st.session_state.show_dashboard     = False
+            st.session_state.show_espace_eleve  = False
+            st.session_state.eleve_dossier_actif = None
+            rerun()
+    st.markdown("<div style='margin-bottom:0.5rem;'></div>", unsafe_allow_html=True)
+
+
+def _breadcrumb(chemin: list, retour_cible: str | None, retour_key: str):
+    """
+    Affiche un fil d'Ariane + flèche retour uniforme.
+
+    Args:
+        chemin      : liste de labels ex. ["Accueil", "Espace Élève", "Inscription"]
+        retour_cible: valeur de accueil_sous_mode vers laquelle revenir (None = accueil racine)
+        retour_key  : clé unique du bouton
+    """
+    # Fil d'Ariane
+    sep = " <span style='opacity:0.35;'>›</span> "
+    crumbs_html = sep.join(
+        f"<span style='opacity:0.45;font-size:0.78rem;'>{c}</span>" if i < len(chemin)-1
+        else f"<span style='font-weight:700;font-size:0.78rem;'>{c}</span>"
+        for i, c in enumerate(chemin)
+    )
+    st.markdown(
+        f"<div style='color:#6366f1;margin-bottom:0.2rem;'>{crumbs_html}</div>",
+        unsafe_allow_html=True
+    )
+    # Bouton retour
+    label_retour = f"← {'Accueil' if retour_cible is None else chemin[-2]}"
+    col_btn, _ = st.columns([1, 7])
+    with col_btn:
+        if st.button(label_retour, key=retour_key, type="secondary"):
+            if retour_cible is None:
+                st.session_state.accueil_sous_mode = None
+                st.session_state.mode_accueil = "accueil"
+            else:
+                st.session_state.accueil_sous_mode = retour_cible
+            rerun()
+    st.markdown("<div style='margin-bottom:0.4rem;'></div>", unsafe_allow_html=True)
+
 # =====================================================================
 # CONFIGURATION
 # =====================================================================
@@ -731,14 +798,12 @@ TABLES_ETALONNAGE = {
 }
 
 
-def etalonner(note_brute, test_key: str = "default") -> float:
-    """Étalonne une note brute selon la table propre au test.
-    S1 : chaque test dispose de sa propre table d'étalonnage.
+def etalonner(note_sur_20, test_key: str = "default") -> float:
+    """Étalonnage : note_brute × 20 / total_questions.
+    Dans le parcours conseiller, la note est saisie directement /20,
+    donc elle est déjà étalonnée — on la retourne telle quelle.
     """
-    table = TABLES_ETALONNAGE.get(test_key.lower(), ETALONNAGE_DEFAULT)
-    keys  = sorted(table.keys())
-    best  = min(keys, key=lambda k: abs(k - note_brute))
-    return table[best]
+    return round(float(note_sur_20), 2)
 
 # =====================================================================
 # BANQUE DE QUESTIONS DES TESTS PSYCHOTECHNIQUES
@@ -1876,6 +1941,7 @@ def _generer_pdf_rapport(dossiers, stats):
 
 def afficher_dashboard():
     """Tableau de bord complet — Mode Conseiller."""
+    _retour_accueil("← Accueil", key="retour_dashboard")
     STATUT_META = {
         "confirme":    ("✅ Confirmés",    "#10b981","#d1fae5","badge-confirme"),
         "revise":      ("🔄 Révisés",      "#ec4899","#fce7f3","badge-revise"),
@@ -2090,12 +2156,15 @@ def afficher_dashboard():
 
                     # ── Prévisualisation en temps réel ───────────────────────
                     st.write("")
-                    sa_d = sa_diag
-                    la_d = la_diag
+                    # sa_ex et la_ex sont déjà définis plus haut dans ce scope (has_submission block)
+                    sa_d = sa_ex or 0
+                    la_d = la_ex or 0
 
-                    # Choix de série de l'élève (depuis son profil enregistré)
-                    choix_diag = base.get("choix_personnel","") if dossier_ex else (
-                        sub_ex.get("choix_personnel","") if has_submission else ""
+                    # Choix de série de l'élève (depuis son profil enregistré ou sa submission)
+                    choix_diag = (
+                        dossier_ex.get("choix_personnel", "") if dossier_ex else (
+                            sub_ex.get("choix_personnel", "") if sub_ex else ""
+                        )
                     )
                     choix_C_d = "C" in choix_diag
                     choix_A_d = "A" in choix_diag
@@ -2153,6 +2222,13 @@ def afficher_dashboard():
                                  key=f"diag_{uid_diag}"):
                         # Construire le dossier complet
                         base = dict(dossier_ex) if dossier_ex else {}
+                        # Récupérer les scores des tests depuis la soumission élève
+                        scores_from_sub = {}
+                        if sub_ex:
+                            for _tk in ["d48","krx","meca","bv11","prc"]:
+                                v = sub_ex.get(f"{_tk}_score")
+                                if v is not None:
+                                    scores_from_sub[_tk] = float(v)
                         base.update({
                             "nom":              nom_i,
                             "prenom":           prenom_i,
@@ -2165,6 +2241,8 @@ def afficher_dashboard():
                             "revenu_famille":   base.get("revenu_famille",""),
                             "SA_etal":          sa_d,  "SA_brut": sa_d,
                             "LA_etal":          la_d,  "LA_brut": la_d,
+                            # Scores tests depuis submission (priorité sur valeurs BDD)
+                            **{k: scores_from_sub.get(k, base.get(k, 10.0)) for k in ["d48","krx","meca","bv11","prc"]},
                             "maths_t1":    n_maths,  "sci_phy_t1": n_sciphy, "svt_t1":  n_svt,
                             "francais_t1": n_fr,     "histgeo_t1": n_hg,     "anglais_t1": n_ang,
                             "t1_renseigne":     True,
@@ -2364,7 +2442,7 @@ def afficher_dashboard():
         e1, e2, e3, e4 = st.columns(4)
         with e1:
             try:
-                xlsx = generer_excel_export(all_exp)
+                xlsx = _generer_excel(all_exp)
                 if xlsx:
                     st.download_button("📊 Excel (.xlsx)", xlsx,
                         file_name=f"capavenir_{datetime.now().strftime('%Y%m%d')}.xlsx",
@@ -2376,7 +2454,7 @@ def afficher_dashboard():
                 st.caption(f"Erreur Excel: {ex}")
         with e2:
             try:
-                docx_b = generer_word_export(all_exp, stats_exp)
+                docx_b = _generer_word(all_exp, stats_exp)
                 if docx_b:
                     st.download_button("📝 Word (.docx)", docx_b,
                         file_name=f"capavenir_{datetime.now().strftime('%Y%m%d')}.docx",
@@ -2388,7 +2466,7 @@ def afficher_dashboard():
                 st.caption(f"Erreur Word: {ex}")
         with e3:
             try:
-                pdf_b = generer_pdf_rapport(all_exp, stats_exp)
+                pdf_b = _generer_pdf_rapport(all_exp, stats_exp)
                 st.download_button("📄 PDF Rapport", pdf_b,
                     file_name=f"rapport_capavenir_{datetime.now().strftime('%Y%m%d')}.pdf",
                     mime="application/pdf", use_container_width=True)
@@ -2409,6 +2487,7 @@ def afficher_dashboard():
 # =====================================================================
 def afficher_espace_eleve():
     """Vue dédiée à l'élève : résultats tests, conversation IA, orientation. Lecture seule."""
+    _retour_accueil("← Accueil", key="retour_espace_eleve")
 
     st.markdown("""
     <div style="display:flex;align-items:center;gap:0.8rem;margin-bottom:1.5rem;">
@@ -2544,96 +2623,255 @@ def afficher_espace_eleve():
             Complétez-les ci-dessous. Vos réponses seront analysées par votre Conseiller.
         </div>""", unsafe_allow_html=True)
 
+        # ── Étalonnage : score_brut (nb bonnes réponses) × 20 / total_questions ──
+        def _etal(nb_bonnes: int, total_questions: int) -> float:
+            """Note étalonnée = nb_bonnes × 20 / total  (règle de trois standard)."""
+            if total_questions == 0:
+                return 0.0
+            return round(nb_bonnes * 20 / total_questions, 2)
+
         test_keys_e  = ["D48", "KRX", "MECA", "BV11", "PRC"]
         test_names_e = [TESTS_QUESTIONS[k]["nom"].split("—")[0].strip() for k in test_keys_e]
         test_tabs_e  = st.tabs(test_names_e)
 
         for t_key, t_tab in zip(test_keys_e, test_tabs_e):
             with t_tab:
-                tdata = TESTS_QUESTIONS[t_key]
-                st.caption(tdata["description"])
-                eleve_key = f"eleve_answers_{t_key}"
-                if eleve_key not in st.session_state:
-                    st.session_state[eleve_key] = {}
-                nb_correct_e = 0
-                for q_idx, q in enumerate(tdata["questions"]):
-                    st.markdown(f'<div class="test-question"><strong>Q{q_idx+1}.</strong> {q["q"]}</div>', unsafe_allow_html=True)
-                    prev_e = st.session_state[eleve_key].get(q_idx)
-                    # Aucune réponse présélectionnée : index=None si rien encore choisi
-                    idx_def_e = q["choices"].index(prev_e) if prev_e in q["choices"] else None
-                    ch_e = st.radio(
-                        f"Eleve_R{q_idx+1}_{t_key}",
-                        q["choices"], index=idx_def_e,
-                        key=f"eleve_q_{t_key}_{q_idx}",
-                        label_visibility="collapsed"
-                    )
-                    if ch_e is not None:
-                        st.session_state[eleve_key][q_idx] = ch_e
-                        if ch_e == q["answer"]:
-                            nb_correct_e += 1
-                nb_rep_e = sum(1 for v in st.session_state[eleve_key].values() if v is not None)
-                total_e  = len(tdata["questions"])
-                if nb_rep_e >= total_e:
-                    # Score brut = nb bonnes réponses sur total_e questions
-                    score_brut_e = nb_correct_e          # ex. 28 sur 40
-                    # Score étalonnée = ramené sur 20
-                    score_etal_e = round((score_brut_e / total_e) * 20, 1)
-                    # Stocker dans les variables de session (score étalonnée)
-                    st.session_state[f"eleve_score_{t_key}"]      = score_etal_e
-                    st.session_state[f"eleve_score_brut_{t_key}"] = score_brut_e
-                    st.markdown(f'<div class="alert-success">✅ Test {t_key} complété — {total_e} réponses enregistrées.</div>', unsafe_allow_html=True)
-                    # ── Résultats visibles par l'élève (sans correction) ──
-                    st.markdown(f"""
-                    <div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);
-                                border-left:4px solid #10b981;border-radius:12px;
-                                padding:1rem 1.4rem;margin-top:0.5rem;">
-                        <div style="font-weight:700;color:#065f46;font-size:0.95rem;margin-bottom:0.6rem;">
-                            📊 Vos résultats — Test {t_key}
-                        </div>
-                        <div style="display:flex;gap:2.5rem;flex-wrap:wrap;">
-                            <div>
-                                <div style="font-size:0.72rem;color:#047857;text-transform:uppercase;
-                                            letter-spacing:.06em;font-weight:600;">Score brut</div>
-                                <div style="font-size:1.6rem;font-weight:800;color:#065f46;line-height:1.1;">
-                                    {score_brut_e}<span style="font-size:0.9rem;font-weight:500;
-                                    color:#047857;">/{total_e} pts</span>
-                                </div>
-                            </div>
-                            <div>
-                                <div style="font-size:0.72rem;color:#047857;text-transform:uppercase;
-                                            letter-spacing:.06em;font-weight:600;">Score étalonnée</div>
-                                <div style="font-size:1.6rem;font-weight:800;color:#065f46;line-height:1.1;">
-                                    {score_etal_e}<span style="font-size:0.9rem;font-weight:500;
-                                    color:#047857;">/20</span>
-                                </div>
-                            </div>
-                            <div>
-                                <div style="font-size:0.72rem;color:#047857;text-transform:uppercase;
-                                            letter-spacing:.06em;font-weight:600;">Taux</div>
-                                <div style="font-size:1.6rem;font-weight:800;color:#065f46;line-height:1.1;">
-                                    {round(score_brut_e/total_e*100)}%
-                                </div>
-                            </div>
-                        </div>
-                        <div style="margin-top:0.8rem;font-size:0.78rem;color:#047857;opacity:0.8;">
-                            ℹ️ La correction détaillée est réservée à votre Conseiller d'Orientation.
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="alert-warning">📝 {nb_rep_e}/{total_e} questions répondues.</div>', unsafe_allow_html=True)
+                tdata     = TESTS_QUESTIONS[t_key]
+                total_e   = len(tdata["questions"])
+                lock_key  = f"eleve_locked_{t_key}"   # True = soumis et verrouillé
+                ans_key   = f"eleve_answers_{t_key}"  # dict {q_idx: choix}
+                brut_key  = f"eleve_brut_{t_key}"     # nb bonnes réponses
+                etal_key  = f"eleve_etal_{t_key}"     # score étalonnée /20
 
-        # Vérifier si tous les tests sont complétés
-        tous_complets = all(
-            sum(1 for v in st.session_state.get(f"eleve_answers_{k}", {}).values() if v) >= len(TESTS_QUESTIONS[k]["questions"])
-            for k in test_keys_e
-        )
-        if tous_complets:
-            st.markdown("""
-            <div class="alert-success">
-                🎉 <strong>Tous les tests sont complétés !</strong><br>
-                Vos réponses ont été enregistrées. Signalez à votre Conseiller d'Orientation
-                que vous avez terminé votre passation.
+                # Initialisation session
+                if ans_key  not in st.session_state: st.session_state[ans_key]  = {}
+                if lock_key not in st.session_state: st.session_state[lock_key] = False
+
+                locked = st.session_state[lock_key]
+
+                if locked:
+                    # ══════════════════════════════════════════════════════
+                    # TEST SOUMIS — Affichage résultats uniquement, lecture seule
+                    # ══════════════════════════════════════════════════════
+                    sc_brut  = st.session_state.get(brut_key, 0)
+                    sc_etal  = st.session_state.get(etal_key, 0.0)
+                    pct      = round(sc_brut / total_e * 100)
+                    # Couleur selon performance
+                    if pct >= 70:
+                        bg1,bg2,brd,txt = "#ecfdf5","#d1fae5","#10b981","#065f46"
+                        emoji = "🏆"
+                    elif pct >= 50:
+                        bg1,bg2,brd,txt = "#fffbeb","#fef3c7","#f59e0b","#78350f"
+                        emoji = "👍"
+                    else:
+                        bg1,bg2,brd,txt = "#fef2f2","#fee2e2","#ef4444","#7f1d1d"
+                        emoji = "📚"
+
+                    st.markdown(f"""
+                    <div style="background:linear-gradient(135deg,{bg1},{bg2});
+                                border-left:5px solid {brd};border-radius:14px;
+                                padding:1.2rem 1.6rem;margin:0.5rem 0;
+                                box-shadow:0 4px 15px rgba(0,0,0,0.08);">
+                        <div style="font-weight:800;color:{txt};font-size:1rem;margin-bottom:0.8rem;">
+                            {emoji} Résultats — Test {t_key} &nbsp;
+                            <span style="background:{brd};color:#fff;border-radius:20px;
+                                         padding:2px 12px;font-size:0.75rem;font-weight:700;">
+                                SOUMIS ✓
+                            </span>
+                        </div>
+                        <div style="display:flex;gap:2.5rem;flex-wrap:wrap;align-items:flex-end;">
+                            <div>
+                                <div style="font-size:0.68rem;color:{txt};text-transform:uppercase;
+                                            letter-spacing:.08em;font-weight:700;opacity:0.7;">
+                                    Score brut
+                                </div>
+                                <div style="font-size:2.2rem;font-weight:900;color:{txt};line-height:1;">
+                                    {sc_brut}<span style="font-size:1rem;font-weight:500;opacity:0.7;">
+                                    /{total_e}</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size:0.68rem;color:{txt};text-transform:uppercase;
+                                            letter-spacing:.08em;font-weight:700;opacity:0.7;">
+                                    Score /20
+                                </div>
+                                <div style="font-size:2.2rem;font-weight:900;color:{txt};line-height:1;">
+                                    {sc_etal:.1f}<span style="font-size:1rem;font-weight:500;opacity:0.7;">
+                                    /20</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size:0.68rem;color:{txt};text-transform:uppercase;
+                                            letter-spacing:.08em;font-weight:700;opacity:0.7;">
+                                    Réussite
+                                </div>
+                                <div style="font-size:2.2rem;font-weight:900;color:{txt};line-height:1;">
+                                    {pct}%
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top:0.9rem;background:rgba(255,255,255,0.4);
+                                    border-radius:8px;height:8px;overflow:hidden;">
+                            <div style="width:{pct}%;height:100%;background:{brd};
+                                        border-radius:8px;"></div>
+                        </div>
+                        <div style="margin-top:0.5rem;font-size:0.75rem;color:{txt};opacity:0.65;">
+                            ℹ️ Test verrouillé — la correction détaillée est réservée au Conseiller d'Orientation.
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                else:
+                    # ══════════════════════════════════════════════════════
+                    # TEST EN COURS — Questions actives, aucune réponse précochée
+                    # ══════════════════════════════════════════════════════
+                    st.caption(tdata["description"])
+                    for q_idx, q in enumerate(tdata["questions"]):
+                        st.markdown(
+                            f'<div class="test-question">'
+                            f'<strong>Q{q_idx+1}.</strong> {q["q"]}</div>',
+                            unsafe_allow_html=True
+                        )
+                        ch_e = st.radio(
+                            f"__R{q_idx+1}_{t_key}",
+                            q["choices"],
+                            index=None,          # ← jamais de réponse précochée
+                            key=f"eq_{t_key}_{q_idx}",
+                            label_visibility="collapsed",
+                        )
+                        if ch_e is not None:
+                            st.session_state[ans_key][q_idx] = ch_e
+
+                    nb_rep_e = len(st.session_state[ans_key])
+
+                    # Barre de progression
+                    prog = nb_rep_e / total_e
+                    st.markdown(f"""
+                    <div style="margin:0.6rem 0 0.2rem;">
+                        <div style="display:flex;justify-content:space-between;
+                                    font-size:0.75rem;color:#64748b;margin-bottom:3px;">
+                            <span>Progression</span>
+                            <span><strong>{nb_rep_e}</strong>/{total_e} questions</span>
+                        </div>
+                        <div style="background:#e2e8f0;border-radius:6px;height:7px;overflow:hidden;">
+                            <div style="width:{int(prog*100)}%;height:100%;
+                                        background:{'#10b981' if prog==1 else '#6366f1'};
+                                        border-radius:6px;transition:width 0.3s;"></div>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    if nb_rep_e < total_e:
+                        st.markdown(
+                            f'<div class="alert-warning" style="margin-top:0.4rem;">'
+                            f'📝 Répondez aux {total_e - nb_rep_e} question(s) restante(s) '
+                            f'pour pouvoir soumettre.</div>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="alert-success" style="margin-top:0.4rem;">'
+                            '✅ Toutes les questions sont répondues — vous pouvez soumettre !</div>',
+                            unsafe_allow_html=True
+                        )
+                        if st.button(
+                            f"📤 Soumettre le test {t_key} et voir mon score",
+                            use_container_width=True,
+                            type="primary",
+                            key=f"btn_submit_{t_key}",
+                        ):
+                            # Calculer le score
+                            nb_correct = sum(
+                                1 for qi, rep in st.session_state[ans_key].items()
+                                if rep == tdata["questions"][qi]["answer"]
+                            )
+                            sc_etal_calc = _etal(nb_correct, total_e)
+                            st.session_state[brut_key] = nb_correct
+                            st.session_state[etal_key] = sc_etal_calc
+                            # Verrouiller définitivement
+                            st.session_state[lock_key] = True
+                            st.rerun()
+
+        # ── Récapitulatif global + sauvegarde automatique ──────────────────
+        tous_soumis_e = all(st.session_state.get(f"eleve_locked_{k}", False) for k in test_keys_e)
+
+        if tous_soumis_e:
+            # Calcul SA / LA depuis scores étalonnés
+            d48_e  = float(st.session_state.get("eleve_etal_D48",  0))
+            krx_e  = float(st.session_state.get("eleve_etal_KRX",  0))
+            meca_e = float(st.session_state.get("eleve_etal_MECA", 0))
+            bv11_e = float(st.session_state.get("eleve_etal_BV11", 0))
+            prc_e  = float(st.session_state.get("eleve_etal_PRC",  0))
+            SA_sub = round((d48_e + krx_e) / 2, 2)
+            LA_sub = round((bv11_e + prc_e) / 2, 2)
+
+            scores_sub = {"d48": d48_e,  "krx": krx_e,  "meca": meca_e,
+                          "bv11": bv11_e, "prc": prc_e}
+            bruts_sub  = {
+                "d48":  st.session_state.get("eleve_brut_D48",  0),
+                "krx":  st.session_state.get("eleve_brut_KRX",  0),
+                "meca": st.session_state.get("eleve_brut_MECA", 0),
+                "bv11": st.session_state.get("eleve_brut_BV11", 0),
+                "prc":  st.session_state.get("eleve_brut_PRC",  0),
+            }
+            totaux_sub = {k: len(TESTS_QUESTIONS[k.upper()]["questions"]) for k in scores_sub}
+
+            # Identité depuis la session de connexion
+            _nom_sub    = st.session_state.get("eleve_nom",    "").strip().upper()
+            _prenom_sub = st.session_state.get("eleve_prenom", "").strip().capitalize()
+            _lycee_sub  = st.session_state.get("eleve_lycee",  "").strip()
+
+            # Sauvegarde automatique une seule fois
+            _saved_key = f"sub_saved_{_nom_sub}_{_prenom_sub}"
+            if not st.session_state.get(_saved_key, False) and _nom_sub:
+                res_sub = db.sauvegarder_submission_eleve(
+                    _nom_sub, _prenom_sub, _lycee_sub,
+                    scores_sub, bruts_sub, totaux_sub,
+                    SA_sub, LA_sub,
+                )
+                if res_sub.get("succes"):
+                    st.session_state[_saved_key] = True
+
+            # Bannière succès
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7);
+                        border:2px solid #16a34a;border-radius:16px;
+                        padding:1.2rem 1.6rem;margin:1rem 0;
+                        box-shadow:0 4px 20px rgba(22,163,74,0.15);">
+                <div style="font-size:1.1rem;font-weight:800;color:#14532d;margin-bottom:0.6rem;">
+                    🎉 Tous les tests sont complétés et enregistrés !
+                </div>
+                <div style="font-size:0.85rem;color:#166534;margin-bottom:1rem;">
+                    Vos résultats ont été transmis automatiquement à votre Conseiller d'Orientation.
+                    Il pourra lancer votre diagnostic dès que vous lui aurez communiqué vos notes scolaires.
+                </div>
+                <div style="display:flex;gap:1.5rem;flex-wrap:wrap;">
+                    <div style="background:rgba(255,255,255,0.6);border-radius:10px;
+                                padding:0.5rem 1rem;text-align:center;min-width:90px;">
+                        <div style="font-size:0.65rem;color:#166534;font-weight:700;
+                                    text-transform:uppercase;letter-spacing:.06em;">SA</div>
+                        <div style="font-size:1.5rem;font-weight:900;color:#14532d;">
+                            {SA_sub:.1f}<span style="font-size:0.8rem;opacity:0.7;">/20</span>
+                        </div>
+                        <div style="font-size:0.65rem;color:#166534;">Aptitude Sci.</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.6);border-radius:10px;
+                                padding:0.5rem 1rem;text-align:center;min-width:90px;">
+                        <div style="font-size:0.65rem;color:#166534;font-weight:700;
+                                    text-transform:uppercase;letter-spacing:.06em;">LA</div>
+                        <div style="font-size:1.5rem;font-weight:900;color:#14532d;">
+                            {LA_sub:.1f}<span style="font-size:0.8rem;opacity:0.7;">/20</span>
+                        </div>
+                        <div style="font-size:0.65rem;color:#166534;">Aptitude Lit.</div>
+                    </div>
+                    {" ".join(f'''
+                    <div style="background:rgba(255,255,255,0.6);border-radius:10px;
+                                padding:0.5rem 1rem;text-align:center;min-width:70px;">
+                        <div style="font-size:0.65rem;color:#166534;font-weight:700;
+                                    text-transform:uppercase;letter-spacing:.06em;">{tk}</div>
+                        <div style="font-size:1.3rem;font-weight:900;color:#14532d;">
+                            {scores_sub[tk.lower()]:.1f}<span style="font-size:0.7rem;opacity:0.7;">/20</span>
+                        </div>
+                    </div>''' for tk in ["D48","KRX","MECA","BV11","PRC"])}
+                </div>
             </div>""", unsafe_allow_html=True)
 
     st.write("")
@@ -2944,10 +3182,7 @@ def afficher_page_accueil():
 
     # ── CHOIX ÉLÈVE : Nouveau ou Dossier existant ───────────────────
     if sous_mode == "choix_eleve":
-        if st.button("← Retour", key="retour_choix_eleve"):
-            st.session_state.accueil_sous_mode = None
-            st.session_state.mode_accueil = "accueil"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Élève"], None, "bc_choix_eleve")
 
         st.markdown(f"""
         <div style="text-align:center; padding:1.2rem 0 0.5rem;">
@@ -3001,9 +3236,7 @@ def afficher_page_accueil():
 
     # ── INSCRIPTION ÉLÈVE ───────────────────────────────────────────
     if sous_mode == "inscription_eleve":
-        if st.button("← Retour", key="retour_inscription"):
-            st.session_state.accueil_sous_mode = "choix_eleve"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Élève", "Inscription"], "choix_eleve", "bc_inscription")
 
         st.markdown(f"""
         <div style="text-align:center; padding:0.8rem 0 1.2rem;">
@@ -3099,6 +3332,7 @@ def afficher_page_accueil():
 
     # ── ESPACE TESTS APRÈS INSCRIPTION ─────────────────────────────
     if sous_mode == "espace_tests":
+        _breadcrumb(["Accueil", "Espace Élève", "Tests Psychotechniques"], "choix_eleve", "bc_espace_tests")
         prenom_e = st.session_state.get("prenom", "")
         nom_e    = st.session_state.get("nom", "")
 
@@ -3195,9 +3429,7 @@ def afficher_page_accueil():
 
     # ── CONSULTER UN DOSSIER EXISTANT (depuis accueil élève) ────────
     if sous_mode == "dossier_eleve":
-        if st.button("← Retour", key="retour_dossier_accueil"):
-            st.session_state.accueil_sous_mode = "choix_eleve"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Élève", "Mon Dossier"], "choix_eleve", "bc_dossier_eleve")
 
         st.markdown(f"""
         <div style="text-align:center; padding:0.8rem 0 1.2rem;">
@@ -3275,10 +3507,7 @@ def afficher_page_accueil():
 
     # ── CONSEILLER : Choix connexion ou inscription ──────────────────
     if sous_mode == "choix_conseiller":
-        if st.button("← Retour", key="retour_choix_cons"):
-            st.session_state.accueil_sous_mode = None
-            st.session_state.mode_accueil = "accueil"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Conseiller"], None, "bc_choix_conseiller")
 
         st.markdown(f"""
         <div style="text-align:center; padding:0.8rem 0 1.2rem;">
@@ -3331,9 +3560,7 @@ def afficher_page_accueil():
 
     # ── CONNEXION CONSEILLER ────────────────────────────────────────
     if sous_mode == "login_conseiller":
-        if st.button("← Retour", key="retour_login_cons"):
-            st.session_state.accueil_sous_mode = "choix_conseiller"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Conseiller", "Connexion"], "choix_conseiller", "bc_login_conseiller")
 
         st.markdown(f"""
         <div style="text-align:center; padding:0.8rem 0 1.5rem;">
@@ -3364,9 +3591,7 @@ def afficher_page_accueil():
 
     # ── DEMANDE D'ACCÈS CONSEILLER ──────────────────────────────────
     if sous_mode == "demande_conseiller":
-        if st.button("← Retour", key="retour_demande_cons"):
-            st.session_state.accueil_sous_mode = "choix_conseiller"
-            rerun()
+        _breadcrumb(["Accueil", "Espace Conseiller", "Demande d'Accès"], "choix_conseiller", "bc_demande_conseiller")
 
         st.markdown(f"""
         <div style="text-align:center; padding:0.8rem 0 1.2rem;">
@@ -3447,6 +3672,8 @@ else:
 STEPS = ["Profil", "Notes", "Tests", "Diagnostic", "Fiche"]
 ICONS = ["📋", "📚", "🧪", "🤖", "📄"]
 step = st.session_state.step
+
+_retour_accueil("← Accueil", key="retour_parcours_conseiller")
 
 cols = st.columns(len(STEPS))
 for i, col in enumerate(cols):
@@ -3677,59 +3904,252 @@ elif step == 2:
         </div>""", unsafe_allow_html=True)
 
     if mode_guidee:
-        st.markdown("_Répondez aux questions de chaque test. Sélectionnez une réponse par question._")
+        st.markdown("_Répondez aux questions de chaque test, puis soumettez. Une fois soumis, le test est verrouillé._")
         test_keys  = ["D48", "KRX", "MECA", "BV11", "PRC"]
         test_names = [TESTS_QUESTIONS[k]["nom"].split("—")[0].strip() for k in test_keys]
         test_tabs  = st.tabs(test_names)
 
         for t_key, t_tab in zip(test_keys, test_tabs):
             with t_tab:
-                tdata = TESTS_QUESTIONS[t_key]
+                tdata        = TESTS_QUESTIONS[t_key]
                 st.caption(tdata["description"])
                 if t_key not in st.session_state.test_answers:
                     st.session_state.test_answers[t_key] = {}
 
-                correct = 0
-                for q_idx, q in enumerate(tdata["questions"]):
-                    st.markdown(f'<div class="test-question"><strong>Q{q_idx+1}.</strong> {q["q"]}</div>', unsafe_allow_html=True)
-                    prev = st.session_state.test_answers[t_key].get(q_idx)
-                    # Aucune réponse présélectionnée : index=None si rien encore choisi
-                    idx_default = q["choices"].index(prev) if prev in q["choices"] else None
-                    choice = st.radio(
-                        f"R{q_idx+1}_{t_key}",
-                        q["choices"],
-                        index=idx_default,
-                        key=f"q_{t_key}_{q_idx}",
-                        label_visibility="collapsed"
+                # ── Clé de verrouillage (soumission définitive) ──
+                lock_key = f"test_locked_{t_key}"
+                if lock_key not in st.session_state:
+                    st.session_state[lock_key] = False
+                locked = st.session_state[lock_key]
+
+                total_q = len(tdata["questions"])
+
+                if locked:
+                    # ════════════════════════════════════════════════
+                    # TEST SOUMIS — affichage résultat, questions grisées
+                    # ════════════════════════════════════════════════
+                    # Recalculer le score depuis les réponses enregistrées
+                    nb_correct = sum(
+                        1 for q_idx, q in enumerate(tdata["questions"])
+                        if st.session_state.test_answers[t_key].get(q_idx) == q["answer"]
                     )
-                    if choice is not None:
-                        st.session_state.test_answers[t_key][q_idx] = choice
-                    if choice == q["answer"]:
-                        correct += 1
-                    elif mode_conseiller and choice is not None:
-                        st.caption(f"✅ Réponse correcte : {q['answer']} — {q['expl']}")
+                    score_brut = nb_correct
+                    score_etal = round((score_brut / total_q) * 20, 1)
+                    pct        = round(score_brut / total_q * 100)
 
-                # Score brut = nb bonnes réponses sur le total de questions
-                total_q_c    = len(tdata["questions"])
-                score_brut_c = correct                              # ex. 15/20
-                score        = round((score_brut_c / total_q_c) * 20, 1)  # étalonnée /20
-                st.session_state.test_scores[t_key] = score
-
-                # Scores visibles UNIQUEMENT en mode conseiller
-                if mode_conseiller:
-                    st.success(f"Score : **{score_brut_c}/{total_q_c}** réponses (brut) → **{score}/20** (étalonnée)")
-                else:
-                    nb_rep = sum(1 for v in st.session_state.test_answers[t_key].values() if v is not None)
-                    total_q = len(tdata["questions"])
-                    if nb_rep >= total_q:
-                        st.markdown(f'<div class="alert-success">✅ Test {t_key} complété — {total_q}/{total_q} réponses enregistrées.</div>', unsafe_allow_html=True)
+                    # Couleur selon performance
+                    if pct >= 70:
+                        card_bg, bar_col, card_txt = "#ecfdf5", "#10b981", "#065f46"
+                        emoji = "🏆"
+                    elif pct >= 50:
+                        card_bg, bar_col, card_txt = "#fffbeb", "#f59e0b", "#78350f"
+                        emoji = "✅"
                     else:
-                        st.markdown(f'<div class="alert-warning">📝 {nb_rep}/{total_q} questions répondues.</div>', unsafe_allow_html=True)
+                        card_bg, bar_col, card_txt = "#fef2f2", "#ef4444", "#7f1d1d"
+                        emoji = "📚"
 
-        # Synchroniser avec les variables de session
+                    # Carte score
+                    st.markdown(f"""
+                    <div style="background:{card_bg};border-radius:16px;padding:1.2rem 1.6rem;
+                                margin-bottom:1rem;border:1px solid {bar_col}33;">
+                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+                            <div style="font-size:2.4rem;">{emoji}</div>
+                            <div style="flex:1;">
+                                <div style="font-weight:800;font-size:1rem;color:{card_txt};">
+                                    Test {t_key} — Résultat final
+                                </div>
+                                <div style="display:flex;gap:2rem;margin-top:0.5rem;flex-wrap:wrap;">
+                                    <div>
+                                        <div style="font-size:0.68rem;text-transform:uppercase;
+                                                    letter-spacing:.07em;font-weight:700;color:{card_txt};opacity:.7;">
+                                            Score brut
+                                        </div>
+                                        <div style="font-size:1.8rem;font-weight:900;color:{card_txt};line-height:1;">
+                                            {score_brut}<span style="font-size:1rem;font-weight:500;">/{total_q}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size:0.68rem;text-transform:uppercase;
+                                                    letter-spacing:.07em;font-weight:700;color:{card_txt};opacity:.7;">
+                                            Note /20
+                                        </div>
+                                        <div style="font-size:1.8rem;font-weight:900;color:{card_txt};line-height:1;">
+                                            {score_etal}<span style="font-size:1rem;font-weight:500;">/20</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div style="font-size:0.68rem;text-transform:uppercase;
+                                                    letter-spacing:.07em;font-weight:700;color:{card_txt};opacity:.7;">
+                                            Réussite
+                                        </div>
+                                        <div style="font-size:1.8rem;font-weight:900;color:{bar_col};line-height:1;">
+                                            {pct}%
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Barre de progression -->
+                                <div style="margin-top:0.7rem;background:#e5e7eb;border-radius:8px;
+                                            height:8px;overflow:hidden;">
+                                    <div style="width:{pct}%;height:100%;background:{bar_col};
+                                                border-radius:8px;transition:width .4s ease;"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top:0.8rem;font-size:0.75rem;color:{card_txt};opacity:0.65;">
+                            🔒 Test verrouillé — La correction détaillée est réservée à votre Conseiller.
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    # Stocker dans test_scores pour le reste de l'app
+                    st.session_state.test_scores[t_key] = score_etal
+
+                else:
+                    # ════════════════════════════════════════════════
+                    # TEST EN COURS — questions interactives
+                    # ════════════════════════════════════════════════
+                    correct = 0
+                    for q_idx, q in enumerate(tdata["questions"]):
+                        st.markdown(
+                            f'<div class="test-question"><strong>Q{q_idx+1}.</strong> {q["q"]}</div>',
+                            unsafe_allow_html=True
+                        )
+                        prev = st.session_state.test_answers[t_key].get(q_idx)
+                        idx_default = q["choices"].index(prev) if prev in q["choices"] else None
+                        choice = st.radio(
+                            f"R{q_idx+1}_{t_key}",
+                            q["choices"],
+                            index=idx_default,     # None = aucune réponse présélectionnée
+                            key=f"q_{t_key}_{q_idx}",
+                            label_visibility="collapsed"
+                        )
+                        if choice is not None:
+                            st.session_state.test_answers[t_key][q_idx] = choice
+                        if choice == q["answer"]:
+                            correct += 1
+                        elif mode_conseiller and choice is not None:
+                            st.caption(f"✅ Réponse correcte : {q['answer']} — {q['expl']}")
+
+                    nb_rep = sum(1 for v in st.session_state.test_answers[t_key].values() if v is not None)
+
+                    # Barre de progression des réponses
+                    pct_rep = round(nb_rep / total_q * 100)
+                    if nb_rep < total_q:
+                        st.markdown(f"""
+                        <div style="margin-top:0.6rem;background:#f1f5f9;border-radius:8px;
+                                    padding:0.6rem 0.9rem;font-size:0.82rem;color:#475569;">
+                            📝 {nb_rep}/{total_q} questions répondues
+                            <div style="margin-top:0.4rem;background:#e2e8f0;border-radius:6px;
+                                        height:6px;overflow:hidden;">
+                                <div style="width:{pct_rep}%;height:100%;background:#94a3b8;border-radius:6px;"></div>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="margin-top:0.6rem;background:#ecfdf5;border-radius:8px;
+                                    padding:0.6rem 0.9rem;font-size:0.82rem;color:#065f46;font-weight:600;">
+                            ✅ {total_q}/{total_q} questions répondues — Prêt à soumettre !
+                        </div>""", unsafe_allow_html=True)
+
+                    # Bouton de soumission — actif uniquement quand tout est répondu
+                    btn_disabled = (nb_rep < total_q)
+                    if not btn_disabled:
+                        if st.button(
+                            f"📤 Soumettre le test {t_key} et voir mon score",
+                            use_container_width=True,
+                            type="primary",
+                            key=f"submit_{t_key}"
+                        ):
+                            st.session_state[lock_key] = True
+                            # Stocker le score immédiatement
+                            score_brut_now = sum(
+                                1 for q_idx, q in enumerate(tdata["questions"])
+                                if st.session_state.test_answers[t_key].get(q_idx) == q["answer"]
+                            )
+                            score_etal_now = round((score_brut_now / total_q) * 20, 1)
+                            st.session_state.test_scores[t_key] = score_etal_now
+                            rerun()
+                    else:
+                        st.button(
+                            f"📤 Soumettre le test {t_key}",
+                            use_container_width=True,
+                            disabled=True,
+                            key=f"submit_{t_key}_dis",
+                            help="Répondez à toutes les questions d'abord"
+                        )
+
+        # ── Synchroniser scores → variables de session ──
         for key_map in [("D48","d48"), ("KRX","krx"), ("MECA","meca"), ("BV11","bv11"), ("PRC","prc")]:
             if key_map[0] in st.session_state.test_scores:
                 st.session_state[key_map[1]] = st.session_state.test_scores[key_map[0]]
+
+        # ── Auto-sauvegarde BDD dès que tous les tests sont verrouillés (soumis) ──
+        tous_soumis = all(st.session_state.get(f"test_locked_{k}", False) for k in test_keys)
+        if tous_soumis:
+            # Identité depuis session_state
+            _nom_as   = (st.session_state.get("nom","") or "").strip().upper()
+            _prenom_as = (st.session_state.get("prenom","") or "").strip().capitalize()
+            _lycee_as  = (st.session_state.get("lycee","") or "").strip()
+
+            if _nom_as and _prenom_as:
+                _save_key = f"autosave_tests_{_nom_as}_{_prenom_as}"
+                if not st.session_state.get(_save_key, False):
+                    # Construire les scores, bruts, totaux
+                    _scores_as = {}
+                    _bruts_as  = {}
+                    _totaux_as = {}
+                    for _k in test_keys:
+                        _tdata  = TESTS_QUESTIONS[_k]
+                        _tot    = len(_tdata["questions"])
+                        _brut   = sum(
+                            1 for qi, q in enumerate(_tdata["questions"])
+                            if st.session_state.test_answers.get(_k, {}).get(qi) == q["answer"]
+                        )
+                        _etal   = round((_brut / _tot) * 20, 1)
+                        _kl     = _k.lower()
+                        _scores_as[_kl] = _etal
+                        _bruts_as[_kl]  = _brut
+                        _totaux_as[_kl] = _tot
+
+                    # Calculer SA et LA étalonnées
+                    def _etal_as(nb_bonnes, total_questions):
+                        """Note étalonnée = nb_bonnes × 20 / total_questions."""
+                        if total_questions == 0:
+                            return 0.0
+                        return round(nb_bonnes * 20 / total_questions, 2)
+                    _SA_as = round((_etal_as(_bruts_as["d48"], _totaux_as["d48"]) + _etal_as(_bruts_as["krx"], _totaux_as["krx"])) / 2, 2)
+                    _LA_as = round((_etal_as(_bruts_as["bv11"], _totaux_as["bv11"]) + _etal_as(_bruts_as["prc"], _totaux_as["prc"])) / 2, 2)
+
+                    _res = db.sauvegarder_submission_eleve(
+                        _nom_as, _prenom_as, _lycee_as,
+                        _scores_as, _bruts_as, _totaux_as,
+                        _SA_as, _LA_as
+                    )
+                    if _res.get("succes"):
+                        st.session_state[_save_key] = True
+
+            # Récapitulatif tous tests soumis
+            st.divider()
+            st.markdown("### 🎉 Tous les tests sont complétés !")
+            rc = st.columns(5)
+            for col, k in zip(rc, test_keys):
+                sc = st.session_state.test_scores.get(k, 0)
+                br = sum(
+                    1 for qi, q in enumerate(TESTS_QUESTIONS[k]["questions"])
+                    if st.session_state.test_answers.get(k, {}).get(qi) == q["answer"]
+                )
+                tot = len(TESTS_QUESTIONS[k]["questions"])
+                pct_k = round(br / tot * 100) if tot else 0
+                col.markdown(f"""
+                <div class="score-card" style="text-align:center;">
+                    <div style="font-weight:800;font-size:1rem;">{k}</div>
+                    <div style="font-size:1.4rem;font-weight:900;color:#10b981;">{sc:.1f}/20</div>
+                    <div style="font-size:0.75rem;color:#6b7280;">{pct_k}% réussite</div>
+                </div>""", unsafe_allow_html=True)
+            st.markdown("""
+            <div class="alert-success" style="margin-top:1rem;">
+                📨 <strong>Vos scores ont été transmis à votre Conseiller d'Orientation.</strong><br>
+                Il pourra lancer votre diagnostic dès la saisie de vos notes scolaires.
+            </div>""", unsafe_allow_html=True)
 
     else:
         # Saisie directe via sliders — Mode conseiller uniquement
@@ -3753,7 +4173,7 @@ elif step == 2:
             st.caption("PRC : Proverbes et raisonnement linguistique")
             st.session_state.prc  = st.slider("Score PRC",  0.0, 20.0, st.session_state.prc,  0.5, key="sl_prc")
 
-    # ── Récapitulatif : scores visibles seulement au conseiller ──
+    # ── Récapitulatif scores — visible uniquement au conseiller ──
     st.divider()
     if mode_conseiller:
         st.markdown("**Récapitulatif des scores**")
@@ -3777,25 +4197,6 @@ elif step == 2:
         m2.metric("SA étalonnée", f"{SA_etal:.1f}/20", help="Valeur utilisée pour l'orientation")
         m3.metric("LA brute",     f"{LA_brut:.1f}/20")
         m4.metric("LA étalonnée", f"{LA_etal:.1f}/20", help="Valeur utilisée pour l'orientation")
-    else:
-        # Message de confirmation pour l'élève
-        total_reponses = sum(
-            sum(1 for v in st.session_state.test_answers.get(k,{}).values() if v is not None)
-            for k in ["D48","KRX","MECA","BV11","PRC"]
-        )
-        total_questions = sum(len(TESTS_QUESTIONS[k]["questions"]) for k in ["D48","KRX","MECA","BV11","PRC"])
-        if total_reponses >= total_questions:
-            st.markdown("""
-            <div class="alert-success">
-                🎉 <strong>Félicitations !</strong> Vous avez complété tous les tests psychotechniques.
-                Vos réponses ont été enregistrées. Le Conseiller d'Orientation analysera vos résultats.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="alert-warning">
-                📝 <strong>Tests en cours</strong> — {total_reponses}/{total_questions} questions répondues.
-                Complétez tous les tests pour finaliser votre passation.
-            </div>""", unsafe_allow_html=True)
 
     st.write("")
     c1, c2 = st.columns(2)
