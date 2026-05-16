@@ -35,7 +35,7 @@ import json
 import os
 from datetime import datetime
 from typing import Optional
-
+import shutil  # <-- LIGNE AJOUTÉE ICI
 
 # =============================================================================
 # CONSTANTES
@@ -71,12 +71,24 @@ class CapAvenirDB:
     def __init__(self, db_path: str = DB_FILE):
         """
         Ouvre (ou crée) la base de données et initialise les tables.
-
-        Args:
-            db_path: Chemin vers le fichier .db (défaut : capavenir_cmr.db)
+        S'adapte automatiquement à Streamlit Cloud pour éviter l'erreur Read-Only.
         """
-        self.db_path = db_path
-        self.conn    = sqlite3.connect(db_path, check_same_thread=False)
+        # --- NOUVELLE LOGIQUE CLOUD vs LOCAL ---
+        if os.name == 'posix':  # Si le code tourne sur un serveur Linux (Streamlit Cloud)
+            nom_fichier = os.path.basename(db_path)
+            writable_db_path = f"/tmp/{nom_fichier}"
+            
+            # Si le fichier existe dans notre code mais pas encore dans /tmp/, on le copie
+            if not os.path.exists(writable_db_path) and os.path.exists(db_path):
+                shutil.copyfile(db_path, writable_db_path)
+            
+            self.db_path = writable_db_path
+        else:
+            # Si le code tourne sur Windows (Votre ordinateur local)
+            self.db_path = db_path
+        # ----------------------------------------
+
+        self.conn    = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row   # Résultats accessibles par nom de colonne
         self._activer_foreign_keys()
         self._creer_tables()
